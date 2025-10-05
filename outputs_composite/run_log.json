@@ -1,6 +1,7 @@
 {
-  "data_path": "gss7224_r1.dta",
+  "data_path": "data/gss7224_r1.dta",
   "out_dir": "outputs_composite",
+  "mode": "composite",
   "target_modeled": "NR_SEX",
   "composite_items": [
     "sexornt",
