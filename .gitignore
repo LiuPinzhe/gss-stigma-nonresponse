@@ -1,6 +1,9 @@
-# Data files
+# Data files (GSS data is large, download separately)
 *.dta
 *.sav
+gss7224_r1.dta
+
+# Output files
 *.csv
 
 # Output directories
