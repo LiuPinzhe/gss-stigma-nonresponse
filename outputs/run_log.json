@@ -1,0 +1,38 @@
+{
+  "data_path": "gss7224_r1.dta",
+  "out_dir": "outputs",
+  "target_modeled": "NR_sexornt",
+  "predictors_used": [
+    "age",
+    "educ",
+    "sex",
+    "race",
+    "region",
+    "year",
+    "relig",
+    "attend",
+    "polviews",
+    "income",
+    "marital"
+  ],
+  "items_present": [
+    "sexornt",
+    "premarsx",
+    "xmarsex",
+    "homosex"
+  ],
+  "nonresponse_indicators": [
+    "NR_sexornt",
+    "NR_premarsx",
+    "NR_xmarsex",
+    "NR_homosex"
+  ],
+  "metrics": {
+    "logit_accuracy": 0.7620211360634082,
+    "logit_roc_auc": 0.6776994888400273,
+    "gb_accuracy": 0.7685601056803171,
+    "gb_roc_auc": 0.7246744197491097
+  },
+  "outcome_compared": "sexornt",
+  "bootstrap_iters": 500
+}
