@@ -17,12 +17,12 @@ This pipeline analyzes stigma-related nonresponse patterns in the General Social
 
 **Single Item Mode (original approach):**
 ```bash
-python gss_stigma_starter.py --data "gss7224_r1.dta" --out outputs_single --predictors age educ sex race region year relig attend polviews income marital --items sexornt premarsx xmarsex homosex --mode single
+python gss_stigma_starter.py --data "data/gss7224_r1.dta" --out outputs_single --predictors age educ sex race region year relig attend polviews income marital --items sexornt premarsx xmarsex homosex --mode single
 ```
 
 **Composite Mode (any item nonresponse):**
 ```bash
-python gss_stigma_starter.py --data "gss7224_r1.dta" --out outputs_composite --predictors age educ sex race region year relig attend polviews income marital --items sexornt premarsx xmarsex homosex --mode composite
+python gss_stigma_starter.py --data "data/gss7224_r1.dta" --out outputs_composite --predictors age educ sex race region year relig attend polviews income marital --items sexornt premarsx xmarsex homosex --mode composite
 ```
 
 ### Parameters

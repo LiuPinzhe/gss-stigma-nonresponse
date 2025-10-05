@@ -1,5 +1,5 @@
 {
-  "data_path": "gss7224_r1.dta",
+  "data_path": "data/gss7224_r1.dta",
   "out_dir": "outputs_single",
   "mode": "single",
   "target_modeled": "NR_sexornt",
