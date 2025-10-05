@@ -157,7 +157,8 @@ def run_pipeline(
     out_dir: str,
     items: List[str],
     predictors: List[str],
-    bootstrap_iters: int = 500
+    bootstrap_iters: int = 500,
+    mode: str = "composite"
 ):
     ensure_dir(out_dir)
 
@@ -172,7 +173,7 @@ def run_pipeline(
     if not predictors_present:
         raise ValueError("No predictor variables found. Please adjust --predictors to match your .dta columns.")
 
-    # Build nonresponse indicators
+    # Build individual nonresponse indicators for MDS analysis
     nr_cols = []
     for var in items_present:
         nr = f"NR_{var}"
@@ -182,9 +183,25 @@ def run_pipeline(
     if not nr_cols:
         raise ValueError("None of the specified --items were found in the dataset; cannot build nonresponse targets.")
 
-    # Choose the first available NR as the modeling target
-    target = nr_cols[0]
-    print(f"[Target] Modeling nonresponse for: {target}")
+    # Choose target based on mode
+    if mode.lower() == "single":
+        # Single mode: use first available NR as modeling target
+        target = nr_cols[0]
+        print(f"[Target] Modeling single nonresponse for: {target}")
+        print(f"[Mode] Single item mode")
+    elif mode.lower() == "composite":
+        # Composite mode: create NR_SEX indicator
+        # NR_SEX = 1 if ANY sexuality-related item has nonresponse, 0 otherwise
+        df['NR_SEX'] = 0
+        for var in items_present:
+            if var in df.columns:
+                df['NR_SEX'] = df['NR_SEX'] | mark_nonresponse(df[var])
+        target = 'NR_SEX'
+        print(f"[Target] Modeling composite nonresponse for: {target}")
+        print(f"[Target] Composite includes: {items_present}")
+        print(f"[Mode] Composite mode")
+    else:
+        raise ValueError(f"Invalid mode: {mode}. Use 'single' or 'composite'.")
 
     # Design matrix
     X = build_design_matrix(df, predictors_present)
@@ -345,7 +362,9 @@ def run_pipeline(
     run_log = {
         "data_path": data_path,
         "out_dir": out_dir,
+        "mode": mode,
         "target_modeled": target,
+        "composite_items": items_present if mode.lower() == "composite" else None,
         "predictors_used": predictors_present,
         "items_present": items_present,
         "nonresponse_indicators": nr_cols,
@@ -365,6 +384,7 @@ def parse_args():
     ap.add_argument("--items", nargs="*", default=DEFAULT_ITEMS, help="Sensitive items to build nonresponse indicators for")
     ap.add_argument("--predictors", nargs="*", default=DEFAULT_PREDICTORS, help="Predictor variables for disclosure models")
     ap.add_argument("--bootstrap", type=int, default=500, help="Bootstrap iterations for CIs")
+    ap.add_argument("--mode", choices=["single", "composite"], default="composite", help="Modeling mode: 'single' (first item only) or 'composite' (any item nonresponse)")
     return ap.parse_args()
 
 
@@ -375,5 +395,6 @@ if __name__ == "__main__":
         out_dir=args.out,
         items=args.items,
         predictors=args.predictors,
-        bootstrap_iters=args.bootstrap
+        bootstrap_iters=args.bootstrap,
+        mode=args.mode
     )

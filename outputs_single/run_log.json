@@ -1,13 +1,9 @@
 {
   "data_path": "gss7224_r1.dta",
-  "out_dir": "outputs",
-  "target_modeled": "NR_SEX",
-  "composite_items": [
-    "sexornt",
-    "premarsx",
-    "xmarsex",
-    "homosex"
-  ],
+  "out_dir": "outputs_single",
+  "mode": "single",
+  "target_modeled": "NR_sexornt",
+  "composite_items": null,
   "predictors_used": [
     "age",
     "educ",
@@ -34,10 +30,10 @@
     "NR_homosex"
   ],
   "metrics": {
-    "logit_accuracy": 0.9559445178335535,
-    "logit_roc_auc": 0.6333232713429784,
-    "gb_accuracy": 0.9559445178335535,
-    "gb_roc_auc": 0.6744872916958228
+    "logit_accuracy": 0.7620211360634082,
+    "logit_roc_auc": 0.6776994888400273,
+    "gb_accuracy": 0.7685601056803171,
+    "gb_roc_auc": 0.7246744197491097
   },
   "outcome_compared": "sexornt",
   "bootstrap_iters": 500
