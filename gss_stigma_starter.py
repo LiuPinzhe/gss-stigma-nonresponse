@@ -39,7 +39,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix, roc_curve
 from sklearn.manifold import MDS
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -219,6 +219,11 @@ def run_pipeline(
         nr = f"NR_{var}"
         df[nr] = mark_nonresponse(df[var])
         nr_cols.append(nr)
+        # Print statistics for debugging
+        valid_responses = (df[nr] == 0).sum()
+        refusals = (df[nr] == 1).sum()
+        not_asked = df[nr].isna().sum()
+        print(f"[{var}] Valid: {valid_responses:,}, Refused: {refusals:,}, Not asked: {not_asked:,}")
 
     if not nr_cols:
         raise ValueError("None of the specified --items were found in the dataset; cannot build nonresponse targets.")
@@ -272,15 +277,44 @@ def run_pipeline(
     X_train_s = scaler.fit_transform(X_train)
     X_test_s = scaler.transform(X_test)
 
+    # Helper function for threshold optimization
+    def optimize_threshold(y_true, y_pred_proba):
+        fpr, tpr, thresholds = roc_curve(y_true, y_pred_proba)
+        optimal_idx = np.argmax(tpr - fpr)
+        return thresholds[optimal_idx]
+    
+    # Helper function to calculate detailed metrics
+    def calculate_metrics(y_true, y_pred_proba, model_name):
+        auc_score = roc_auc_score(y_true, y_pred_proba)
+        optimal_threshold = optimize_threshold(y_true, y_pred_proba)
+        
+        y_pred_default = (y_pred_proba >= 0.5).astype(int)
+        y_pred_optimized = (y_pred_proba >= optimal_threshold).astype(int)
+        
+        report_optimized = classification_report(y_true, y_pred_optimized, output_dict=True)
+        
+        return {
+            "auc": float(auc_score),
+            "accuracy_default": float(accuracy_score(y_true, y_pred_default)),
+            "accuracy_optimized": float(accuracy_score(y_true, y_pred_optimized)),
+            "precision_optimized": float(report_optimized['1']['precision'] if '1' in report_optimized else 0),
+            "recall_optimized": float(report_optimized['1']['recall'] if '1' in report_optimized else 0),
+            "f1_optimized": float(report_optimized['1']['f1-score'] if '1' in report_optimized else 0),
+            "optimal_threshold": float(optimal_threshold),
+            "class_balance": {
+                "class_0": int(sum(y_true == 0)),
+                "class_1": int(sum(y_true == 1)),
+                "ratio": float(sum(y_true == 1) / len(y_true) if len(y_true) > 0 else 0)
+            }
+        }
+
+    # Logistic Regression
     logit = LogisticRegression(max_iter=2000)
     logit.fit(X_train_s, y_train)
     p_logit = logit.predict_proba(X_test_s)[:, 1]
-    metrics = {
-        "logit_accuracy": float(accuracy_score(y_test, (p_logit >= 0.5).astype(int))),
-        "logit_roc_auc": float(roc_auc_score(y_test, p_logit))
-    }
+    logit_metrics = calculate_metrics(y_test, p_logit, "logistic_regression")
 
-    # Gradient Boosting (no scaling)
+    # Gradient Boosting
     gb = GradientBoostingClassifier(
         n_estimators=300,
         learning_rate=0.05,
@@ -289,18 +323,50 @@ def run_pipeline(
     )
     gb.fit(X_train, y_train)
     p_gb = gb.predict_proba(X_test)[:, 1]
-    metrics.update({
-        "gb_accuracy": float(accuracy_score(y_test, (p_gb >= 0.5).astype(int))),
-        "gb_roc_auc": float(roc_auc_score(y_test, p_gb))
-    })
+    gb_metrics = calculate_metrics(y_test, p_gb, "gradient_boosting")
+    
+    # Choose best model based on AUC
+    if gb_metrics["auc"] > logit_metrics["auc"]:
+        best_model = gb
+        best_metrics = gb_metrics
+        best_model_name = "gradient_boosting"
+        best_proba = p_gb
+    else:
+        best_model = logit
+        best_metrics = logit_metrics
+        best_model_name = "logistic_regression"
+        best_proba = p_logit
+    
+    # Comprehensive metrics
+    metrics = {
+        "best_model": best_model_name,
+        "best_auc": best_metrics["auc"],
+        "accuracy_default": best_metrics["accuracy_default"],
+        "accuracy_optimized": best_metrics["accuracy_optimized"],
+        "precision_optimized": best_metrics["precision_optimized"],
+        "recall_optimized": best_metrics["recall_optimized"],
+        "f1_optimized": best_metrics["f1_optimized"],
+        "optimal_threshold": best_metrics["optimal_threshold"],
+        "class_balance": best_metrics["class_balance"],
+        "all_models": {
+            "logistic_regression": logit_metrics,
+            "gradient_boosting": gb_metrics
+        }
+    }
 
     # Save metrics
     with open(os.path.join(out_dir, "model_metrics.json"), "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
     print("[Model] Saved model_metrics.json")
+    print(f"[Best Model] {best_model_name} with AUC: {best_metrics['auc']:.4f}")
+    print(f"[Results] Accuracy: {best_metrics['accuracy_optimized']:.4f}, F1: {best_metrics['f1_optimized']:.4f}")
 
-    # IPW using GB on full X
-    p_all = gb.predict_proba(X)[:, 1]
+    # IPW using best model on full X
+    if best_model_name == "logistic_regression":
+        X_scaled = scaler.transform(X)
+        p_all = best_model.predict_proba(X_scaled)[:, 1]
+    else:
+        p_all = best_model.predict_proba(X)[:, 1]
     p_all = np.clip(p_all, 1e-6, 0.95)  # avoid huge weights
     df_filtered["IPW"] = pd.Series(1.0 / (1.0 - p_all), index=X.index)
 
