@@ -23,18 +23,69 @@
     "xmarsex",
     "homosex"
   ],
-  "nonresponse_indicators": [
-    "NR_sexornt",
-    "NR_premarsx",
-    "NR_xmarsex",
-    "NR_homosex"
+  "feature_matrix_shape": [
+    75699,
+    19
   ],
   "metrics": {
-    "logit_accuracy": 0.7620211360634082,
-    "logit_roc_auc": 0.6776994888400273,
-    "gb_accuracy": 0.7685601056803171,
-    "gb_roc_auc": 0.7246744197491097
+    "best_model": "auc_optimized",
+    "best_auc": 0.9721830035953731,
+    "accuracy_default": 0.911889035667107,
+    "accuracy_optimized": 0.9096433289299868,
+    "precision_optimized": 1.0,
+    "recall_optimized": 0.8819875776397516,
+    "f1_optimized": 0.9372937293729372,
+    "optimal_threshold": 0.966551389896811,
+    "class_balance": {
+      "class_0": 3548,
+      "class_1": 11592,
+      "ratio": 0.7656538969616908
+    },
+    "all_models": {
+      "rf_weighted": {
+        "auc": 0.9700785948090002,
+        "accuracy_default": 0.9093130779392338,
+        "accuracy_optimized": 0.9103038309114927,
+        "precision_optimized": 0.99970703125,
+        "recall_optimized": 0.8831090407177363,
+        "f1_optimized": 0.9377977281055333,
+        "optimal_threshold": 0.34169196034591504,
+        "class_balance": {
+          "class_0": 3548,
+          "class_1": 11592,
+          "ratio": 0.7656538969616908
+        }
+      },
+      "rf_balanced": {
+        "auc": 0.9718077156192935,
+        "accuracy_default": 0.9116908850726552,
+        "accuracy_optimized": 0.9103698811096433,
+        "precision_optimized": 0.9999023151313862,
+        "recall_optimized": 0.8830227743271222,
+        "f1_optimized": 0.9378349901507169,
+        "optimal_threshold": 0.6374552762023017,
+        "class_balance": {
+          "class_0": 3548,
+          "class_1": 11592,
+          "ratio": 0.7656538969616908
+        }
+      },
+      "gradient_boosting": {
+        "auc": 0.9721830035953731,
+        "accuracy_default": 0.911889035667107,
+        "accuracy_optimized": 0.9096433289299868,
+        "precision_optimized": 1.0,
+        "recall_optimized": 0.8819875776397516,
+        "f1_optimized": 0.9372937293729372,
+        "optimal_threshold": 0.966551389896811,
+        "class_balance": {
+          "class_0": 3548,
+          "class_1": 11592,
+          "ratio": 0.7656538969616908
+        }
+      }
+    }
   },
-  "outcome_compared": "sexornt",
-  "bootstrap_iters": 500
+  "bootstrap_iters": 200,
+  "oversampling_used": true
 }

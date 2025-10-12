@@ -12,7 +12,7 @@ Matches the core requirements in your proposal:
 
 Usage
 -----
-python gss_stigma_starter.py --data /path/to/gss7224_r1.dta --out ./outputs
+python gss_stigma_starter.py --data /path/to/gss_data.xlsx --out ./outputs
 # Optional flags:
 # --items SEXORNT PREMARSX XMARSEX HOMOSEX GAYMARRY
 # --predictors AGE EDUC SEX RACE REGION YEAR RELIG ATTEND POLVIEWS INCOME MARITAL
@@ -48,16 +48,14 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # Defaults & Config
 # -----------------------------
 DEFAULT_ITEMS: List[str] = [
-    "SEXORNT",   # sexual orientation
-    "PREMARSX",  # premarital sex attitude
-    "XMARSEX",   # extramarital sex attitude
-    "HOMOSEX",   # attitudes toward same-sex
-    "GAYMARRY"   # same-sex marriage
+    "sexornt",   # sexual orientation
+    "premarsx",  # premarital sex attitude
+    "xmarsex",   # extramarital sex attitude
 ]
 
 DEFAULT_PREDICTORS: List[str] = [
-    "AGE", "EDUC", "SEX", "RACE", "REGION", "YEAR",
-    "RELIG", "ATTEND", "POLVIEWS", "INCOME", "MARITAL"
+    "age", "educ", "sex", "race", "region", "year",
+    "relig", "attend", "income", "marital"
 ]
 
 NON_SUBSTANTIVE_CODES = {0, 8, 9, 98, 99, 998, 999}
@@ -83,12 +81,34 @@ def to_numeric_or_category(s: pd.Series) -> pd.Series:
 
 
 def mark_nonresponse(series: pd.Series) -> pd.Series:
-    """Binary indicator: 1 if nonresponse (missing/DK/REF), else 0."""
-    s = to_numeric_or_category(series)
+    """Binary indicator: 1 if nonresponse (missing/DK/REF), else 0.
+    Note: .i (Inapplicable) is treated as NaN (not asked), not as nonresponse.
+    """
+    s = series.copy()
     if pd.api.types.is_numeric_dtype(s):
         mask = s.isna() | s.isin(NON_SUBSTANTIVE_CODES) | (s >= 97)
     else:
-        mask = s.isna() | (s.astype(str).str.strip().isin(["", "NA", "NaN", "nan"]))
+        # Handle string-based nonresponse codes for xlsx format
+        s_str = s.astype(str).str.strip()
+        
+        # First, mark .i (Inapplicable) as NaN - these people were not asked
+        inapplicable_mask = s_str.str.startswith(".i")
+        
+        # Then mark actual nonresponse (refused to answer when asked)
+        nonresponse_mask = (s.isna() | 
+                           s_str.isin(["", "NA", "NaN", "nan"]) |
+                           s_str.str.startswith(".d") |  # Do not Know/Cannot Choose
+                           s_str.str.startswith(".s") |  # Skipped on Web
+                           s_str.str.startswith(".n"))   # No answer
+        
+        # Create result: 1 for nonresponse, 0 for valid response, NaN for inapplicable
+        result = pd.Series(np.nan, index=s.index, dtype=float)
+        result[~inapplicable_mask & ~nonresponse_mask] = 0  # Valid responses
+        result[~inapplicable_mask & nonresponse_mask] = 1   # Nonresponse when asked
+        # result[inapplicable_mask] remains NaN (not asked)
+        
+        return result
+    
     return mask.astype(int)
 
 
@@ -99,7 +119,22 @@ def sanitize_numeric(series: pd.Series) -> pd.Series:
         s = s.copy()
         s[(s.isin(NON_SUBSTANTIVE_CODES)) | (s >= 97)] = np.nan
         return s
-    return series
+    else:
+        # For string data, try to extract numeric values
+        s_str = series.astype(str).str.strip()
+        # Skip non-response codes
+        mask = (s_str.str.startswith(".") | 
+                s_str.isin(["", "NA", "NaN", "nan"]))
+        
+        # Try to convert remaining values to numeric
+        result = pd.Series(np.nan, index=series.index, dtype=float)
+        valid_mask = ~mask
+        if valid_mask.any():
+            try:
+                result[valid_mask] = pd.to_numeric(s_str[valid_mask], errors='coerce')
+            except:
+                pass
+        return result
 
 
 def available_columns(df: pd.DataFrame, candidates: List[str]) -> List[str]:
@@ -162,9 +197,14 @@ def run_pipeline(
 ):
     ensure_dir(out_dir)
 
-    # Robust read using pandas with convert_categoricals=False
+    # Load data based on file extension
     print(f"[Load] {data_path}")
-    df = pd.read_stata(data_path, convert_categoricals=False)
+    if data_path.endswith('.xlsx'):
+        df = pd.read_excel(data_path)
+        print(f"[Load] Excel format")
+    else:
+        df = pd.read_stata(data_path, convert_categoricals=False)
+        print(f"[Load] Stata format")
     print(f"[Load] shape={df.shape[0]:,} x {df.shape[1]:,}")
 
     items_present = available_columns(df, items)
@@ -191,11 +231,21 @@ def run_pipeline(
         print(f"[Mode] Single item mode")
     elif mode.lower() == "composite":
         # Composite mode: create NR_SEX indicator
-        # NR_SEX = 1 if ANY sexuality-related item has nonresponse, 0 otherwise
-        df['NR_SEX'] = 0
+        # Only include cases where at least one item was asked
+        df['NR_SEX'] = np.nan
+        asked_any = pd.Series(False, index=df.index)
+        refused_any = pd.Series(False, index=df.index)
+        
         for var in items_present:
             if var in df.columns:
-                df['NR_SEX'] = df['NR_SEX'] | mark_nonresponse(df[var])
+                nr_var = mark_nonresponse(df[var])
+                # Track if this person was asked any question
+                asked_any |= nr_var.notna()
+                # Track if this person refused any question they were asked
+                refused_any |= (nr_var == 1)
+        
+        # Only assign values for people who were asked at least one question
+        df.loc[asked_any, 'NR_SEX'] = refused_any[asked_any].astype(int)
         target = 'NR_SEX'
         print(f"[Target] Modeling composite nonresponse for: {target}")
         print(f"[Target] Composite includes: {items_present}")
@@ -203,9 +253,14 @@ def run_pipeline(
     else:
         raise ValueError(f"Invalid mode: {mode}. Use 'single' or 'composite'.")
 
+    # Filter to only cases where target is not NaN (i.e., were asked the question)
+    valid_cases = df[target].notna()
+    df_filtered = df[valid_cases].copy()
+    print(f"[Filter] Using {valid_cases.sum():,} cases out of {len(df):,} total ({valid_cases.mean():.1%})")
+    
     # Design matrix
-    X = build_design_matrix(df, predictors_present)
-    y = df[target].astype(int).reindex(X.index)
+    X = build_design_matrix(df_filtered, predictors_present)
+    y = df_filtered[target].astype(int).reindex(X.index)
 
     # Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
@@ -247,7 +302,7 @@ def run_pipeline(
     # IPW using GB on full X
     p_all = gb.predict_proba(X)[:, 1]
     p_all = np.clip(p_all, 1e-6, 0.95)  # avoid huge weights
-    df["IPW"] = pd.Series(1.0 / (1.0 - p_all), index=X.index)
+    df_filtered["IPW"] = pd.Series(1.0 / (1.0 - p_all), index=X.index)
 
     # -----------------------------
     # Reweighted estimation example for a sensitive outcome
@@ -259,39 +314,45 @@ def run_pipeline(
             break
 
     if outcome_var is not None:
-        y_out = sanitize_numeric(df[outcome_var])
-        mask = y_out.notna() & df["IPW"].notna()
-        # Align arrays
-        yvals = y_out[mask].to_numpy()
-        wvals = df.loc[mask, "IPW"].to_numpy()
-        # Unadjusted
-        unadj_mean = float(np.nanmean(yvals))
-        # IPW-adjusted
-        ipw_mean = float(np.average(yvals, weights=wvals))
-
-        # Bootstrap CI for both means
-        idx = np.arange(len(yvals))
-
-        def stat_unadj(sample_idx):
-            return float(np.nanmean(yvals[sample_idx]))
-
-        def stat_ipw(sample_idx):
-            return float(np.average(yvals[sample_idx], weights=wvals[sample_idx]))
-
-        lo_u, hi_u = bootstrap_ci(stat_unadj, idx, B=bootstrap_iters, alpha=0.05, random_state=RANDOM_SEED)
-        lo_w, hi_w = bootstrap_ci(stat_ipw, idx, B=bootstrap_iters, alpha=0.05, random_state=RANDOM_SEED)
-
-        compare = pd.DataFrame({
-            "metric": ["mean_unadjusted", "mean_ipw_adjusted"],
-            "value": [unadj_mean, ipw_mean],
-            "ci_lo": [lo_u, lo_w],
-            "ci_hi": [hi_u, hi_w],
-            "outcome": [outcome_var, outcome_var]
-        })
-        compare.to_csv(os.path.join(out_dir, "adjustment_comparison.csv"), index=False)
-        print(f"[IPW] Saved adjustment_comparison.csv (outcome={outcome_var})")
+        # For categorical variables, analyze proportions of each category
+        outcome_data = df_filtered[outcome_var]
+        weights = df_filtered["IPW"]
+        
+        # Get valid responses (exclude .i, .d, .s, .n codes)
+        valid_mask = (~outcome_data.astype(str).str.startswith('.')) & outcome_data.notna() & weights.notna()
+        
+        if valid_mask.sum() > 0:
+            valid_outcomes = outcome_data[valid_mask]
+            valid_weights = weights[valid_mask]
+            
+            # Calculate unweighted and weighted proportions for each category
+            categories = valid_outcomes.value_counts().index
+            results = []
+            
+            for category in categories:
+                cat_mask = (valid_outcomes == category)
+                
+                # Unweighted proportion
+                unweighted_prop = cat_mask.mean()
+                
+                # Weighted proportion
+                weighted_prop = (cat_mask * valid_weights).sum() / valid_weights.sum()
+                
+                results.append({
+                    'category': category,
+                    'unweighted_proportion': float(unweighted_prop),
+                    'weighted_proportion': float(weighted_prop),
+                    'outcome': outcome_var
+                })
+            
+            compare = pd.DataFrame(results)
+            compare.to_csv(os.path.join(out_dir, "adjustment_comparison.csv"), index=False)
+            print(f"[IPW] Saved adjustment_comparison.csv (outcome={outcome_var})")
+            print(f"[IPW] Analyzed proportions for {len(categories)} categories in {outcome_var}")
+        else:
+            print(f"[IPW] No valid responses for {outcome_var}; skip comparison.")
     else:
-        print("[IPW] No numeric outcome among items; skip comparison.")
+        print("[IPW] No outcome variable found; skip comparison.")
 
     # -----------------------------
     # Temporal trends: observed NR for target, with bootstrap CI per year
@@ -379,7 +440,7 @@ def run_pipeline(
 
 def parse_args():
     ap = argparse.ArgumentParser(description="GSS stigma-related nonresponse starter pipeline")
-    ap.add_argument("--data", required=True, help="Path to GSS 1972–2024 Stata .dta (e.g., gss7224_r1.dta)")
+    ap.add_argument("--data", required=True, help="Path to GSS data file (.xlsx or .dta)")
     ap.add_argument("--out", required=True, help="Output directory")
     ap.add_argument("--items", nargs="*", default=DEFAULT_ITEMS, help="Sensitive items to build nonresponse indicators for")
     ap.add_argument("--predictors", nargs="*", default=DEFAULT_PREDICTORS, help="Predictor variables for disclosure models")
