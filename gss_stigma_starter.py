@@ -39,7 +39,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix, roc_curve
+from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix, roc_curve, brier_score_loss
 from sklearn.manifold import MDS
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -142,31 +142,78 @@ def available_columns(df: pd.DataFrame, candidates: List[str]) -> List[str]:
 
 
 def build_design_matrix(df: pd.DataFrame, predictors: List[str]) -> pd.DataFrame:
-    """Numeric + one-hot for non-numeric, with simple median impute for numerics."""
+    """Enhanced feature engineering for better AUC performance."""
     X = df[predictors].copy()
     numeric_cols = []
     for c in X.columns:
         X[c] = to_numeric_or_category(X[c])
         if pd.api.types.is_numeric_dtype(X[c]):
             numeric_cols.append(c)
+    
     # clean weird codes
     for c in numeric_cols:
-        col = X[c].copy()  # 避免SettingWithCopyWarning
+        col = X[c].copy()
         col[(col.isin(NON_SUBSTANTIVE_CODES)) | (col >= 97)] = np.nan
         X[c] = col
-    # impute numerics with median, fallback to 0 if all NaN
+    
+    # Enhanced feature engineering
+    if 'age' in numeric_cols:
+        age_clean = X['age'].fillna(X['age'].median())
+        X['age_squared'] = age_clean ** 2
+        X['age_log'] = np.log1p(age_clean)
+        X['age_young'] = (age_clean < 30).astype(int)
+        X['age_senior'] = (age_clean > 65).astype(int)
+        X['age'] = age_clean
+    
+    if 'educ' in numeric_cols:
+        educ_clean = X['educ'].fillna(X['educ'].median())
+        X['educ_squared'] = educ_clean ** 2
+        X['college_grad'] = (educ_clean >= 16).astype(int)
+        X['high_school'] = (educ_clean == 12).astype(int)
+        X['low_educ'] = (educ_clean < 12).astype(int)
+        X['educ'] = educ_clean
+    
+    if 'year' in numeric_cols:
+        year_clean = X['year'].fillna(X['year'].median())
+        X['year_centered'] = year_clean - 2000
+        X['year_squared'] = X['year_centered'] ** 2
+        X['recent_years'] = (year_clean >= 2010).astype(int)
+        X['early_years'] = (year_clean < 1990).astype(int)
+        X['year'] = year_clean
+    
+    # Interaction features
+    if 'age' in X.columns and 'educ' in X.columns:
+        age_vals = pd.to_numeric(X['age'], errors='coerce')
+        educ_vals = pd.to_numeric(X['educ'], errors='coerce')
+        X['age_educ_interaction'] = age_vals * educ_vals
+        X['age_educ_ratio'] = age_vals / (educ_vals + 1)
+        X['young_educated'] = ((age_vals < 35) & (educ_vals >= 16)).astype(int)
+    
+    if 'relig' in numeric_cols and 'attend' in numeric_cols:
+        relig_clean = pd.to_numeric(X['relig'], errors='coerce').fillna(X['relig'].median())
+        attend_clean = pd.to_numeric(X['attend'], errors='coerce').fillna(X['attend'].median())
+        X['religiosity'] = relig_clean * attend_clean
+        X['high_religiosity'] = (X['religiosity'] > X['religiosity'].quantile(0.75)).astype(int)
+        X['relig'] = relig_clean
+        X['attend'] = attend_clean
+    
+    # impute remaining numerics with median
     for c in numeric_cols:
-        if X[c].isna().any():
+        if c not in ['age', 'educ', 'year', 'relig', 'attend'] and X[c].isna().any():
             median_val = X[c].median()
-            if pd.isna(median_val):  # 如果所有值都是NaN
+            if pd.isna(median_val):
                 median_val = 0
             X[c] = X[c].fillna(median_val)
-    # one-hot categoricals
+    
+    # Enhanced categorical encoding
     cat_cols = [c for c in X.columns if not pd.api.types.is_numeric_dtype(X[c])]
     if cat_cols:
+        for col in cat_cols:
+            # Frequency encoding for high cardinality
+            freq_encoding = X[col].value_counts(normalize=True)
+            X[f'{col}_freq'] = X[col].map(freq_encoding)
         X = pd.get_dummies(X, columns=cat_cols, dummy_na=True)
     
-    # 最终检查：确保没有NaN值
     X = X.fillna(0)
     return X
 
@@ -286,6 +333,7 @@ def run_pipeline(
     # Helper function to calculate detailed metrics
     def calculate_metrics(y_true, y_pred_proba, model_name):
         auc_score = roc_auc_score(y_true, y_pred_proba)
+        brier_score = brier_score_loss(y_true, y_pred_proba)
         optimal_threshold = optimize_threshold(y_true, y_pred_proba)
         
         y_pred_default = (y_pred_proba >= 0.5).astype(int)
@@ -293,14 +341,31 @@ def run_pipeline(
         
         report_optimized = classification_report(y_true, y_pred_optimized, output_dict=True)
         
+        # Calculate confusion matrix elements
+        cm = confusion_matrix(y_true, y_pred_optimized)
+        tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
+        
+        # Calculate baseline Brier score (always predict base rate)
+        base_rate = sum(y_true) / len(y_true)
+        baseline_brier = brier_score_loss(y_true, [base_rate] * len(y_true))
+        brier_skill_score = 1 - (brier_score / baseline_brier) if baseline_brier > 0 else 0
+        
         return {
             "auc": float(auc_score),
+            "brier_score": float(brier_score),
+            "brier_skill_score": float(brier_skill_score),
             "accuracy_default": float(accuracy_score(y_true, y_pred_default)),
             "accuracy_optimized": float(accuracy_score(y_true, y_pred_optimized)),
             "precision_optimized": float(report_optimized['1']['precision'] if '1' in report_optimized else 0),
             "recall_optimized": float(report_optimized['1']['recall'] if '1' in report_optimized else 0),
             "f1_optimized": float(report_optimized['1']['f1-score'] if '1' in report_optimized else 0),
             "optimal_threshold": float(optimal_threshold),
+            "confusion_matrix": {
+                "true_negative": int(tn),
+                "false_positive": int(fp),
+                "false_negative": int(fn),
+                "true_positive": int(tp)
+            },
             "class_balance": {
                 "class_0": int(sum(y_true == 0)),
                 "class_1": int(sum(y_true == 1)),
@@ -308,17 +373,24 @@ def run_pipeline(
             }
         }
 
-    # Logistic Regression
-    logit = LogisticRegression(max_iter=2000)
+    # Enhanced Logistic Regression
+    logit = LogisticRegression(
+        max_iter=3000,
+        C=0.1,
+        class_weight='balanced',
+        solver='liblinear'
+    )
     logit.fit(X_train_s, y_train)
     p_logit = logit.predict_proba(X_test_s)[:, 1]
     logit_metrics = calculate_metrics(y_test, p_logit, "logistic_regression")
 
-    # Gradient Boosting
+    # Enhanced Gradient Boosting
     gb = GradientBoostingClassifier(
-        n_estimators=300,
-        learning_rate=0.05,
-        max_depth=3,
+        n_estimators=500,
+        learning_rate=0.03,
+        max_depth=6,
+        subsample=0.8,
+        max_features='sqrt',
         random_state=RANDOM_SEED
     )
     gb.fit(X_train, y_train)
@@ -341,12 +413,15 @@ def run_pipeline(
     metrics = {
         "best_model": best_model_name,
         "best_auc": best_metrics["auc"],
+        "brier_score": best_metrics["brier_score"],
+        "brier_skill_score": best_metrics["brier_skill_score"],
         "accuracy_default": best_metrics["accuracy_default"],
         "accuracy_optimized": best_metrics["accuracy_optimized"],
         "precision_optimized": best_metrics["precision_optimized"],
         "recall_optimized": best_metrics["recall_optimized"],
         "f1_optimized": best_metrics["f1_optimized"],
         "optimal_threshold": best_metrics["optimal_threshold"],
+        "confusion_matrix": best_metrics["confusion_matrix"],
         "class_balance": best_metrics["class_balance"],
         "all_models": {
             "logistic_regression": logit_metrics,
@@ -360,6 +435,9 @@ def run_pipeline(
     print("[Model] Saved model_metrics.json")
     print(f"[Best Model] {best_model_name} with AUC: {best_metrics['auc']:.4f}")
     print(f"[Results] Accuracy: {best_metrics['accuracy_optimized']:.4f}, F1: {best_metrics['f1_optimized']:.4f}")
+    print(f"[Calibration] Brier Score: {best_metrics['brier_score']:.4f}, Brier Skill Score: {best_metrics['brier_skill_score']:.4f}")
+    cm = best_metrics['confusion_matrix']
+    print(f"[Confusion Matrix] TN: {cm['true_negative']}, FP: {cm['false_positive']}, FN: {cm['false_negative']}, TP: {cm['true_positive']}")
 
     # IPW using best model on full X
     if best_model_name == "logistic_regression":
