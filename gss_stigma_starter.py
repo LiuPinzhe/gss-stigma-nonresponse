@@ -39,7 +39,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix, roc_curve, brier_score_loss
+from sklearn.metrics import accuracy_score, roc_auc_score, classification_report, confusion_matrix, roc_curve, brier_score_loss, precision_recall_curve, average_precision_score
+from sklearn.calibration import calibration_curve
 from sklearn.manifold import MDS
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -438,6 +439,105 @@ def run_pipeline(
     print(f"[Calibration] Brier Score: {best_metrics['brier_score']:.4f}, Brier Skill Score: {best_metrics['brier_skill_score']:.4f}")
     cm = best_metrics['confusion_matrix']
     print(f"[Confusion Matrix] TN: {cm['true_negative']}, FP: {cm['false_positive']}, FN: {cm['false_negative']}, TP: {cm['true_positive']}")
+    
+    # Create ROC curve comparison plot
+    plt.figure(figsize=(10, 8))
+    
+    # Plot both models
+    for model_name, model_obj in [("Logistic Regression", logit), ("Gradient Boosting", gb)]:
+        if model_name == "Logistic Regression":
+            y_pred_proba_model = model_obj.predict_proba(X_test_s)[:, 1]
+        else:
+            y_pred_proba_model = model_obj.predict_proba(X_test)[:, 1]
+        
+        fpr, tpr, _ = roc_curve(y_test, y_pred_proba_model)
+        auc_score = roc_auc_score(y_test, y_pred_proba_model)
+        plt.plot(fpr, tpr, linewidth=2, label=f'{model_name} (AUC = {auc_score:.3f})')
+    
+    plt.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Random Classifier')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate', fontsize=12)
+    plt.ylabel('True Positive Rate', fontsize=12)
+    plt.title(f'ROC Curves - Model Comparison ({mode} mode)', fontsize=14)
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "roc_curves.png"), dpi=150, bbox_inches='tight')
+    plt.close()
+    print("[ROC] Saved roc_curves.png")
+    
+    # Create Precision-Recall curve comparison plot
+    plt.figure(figsize=(10, 8))
+    
+    for model_name, model_obj in [("Logistic Regression", logit), ("Gradient Boosting", gb)]:
+        if model_name == "Logistic Regression":
+            y_pred_proba_model = model_obj.predict_proba(X_test_s)[:, 1]
+        else:
+            y_pred_proba_model = model_obj.predict_proba(X_test)[:, 1]
+        
+        from sklearn.metrics import precision_recall_curve, average_precision_score
+        precision, recall, _ = precision_recall_curve(y_test, y_pred_proba_model)
+        ap_score = average_precision_score(y_test, y_pred_proba_model)
+        plt.plot(recall, precision, linewidth=2, label=f'{model_name} (AP = {ap_score:.3f})')
+    
+    # Baseline (random classifier)
+    baseline = sum(y_test) / len(y_test)
+    plt.axhline(y=baseline, color='k', linestyle='--', linewidth=1, label=f'Random Classifier (AP = {baseline:.3f})')
+    
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('Recall', fontsize=12)
+    plt.ylabel('Precision', fontsize=12)
+    plt.title(f'Precision-Recall Curves - Model Comparison ({mode} mode)', fontsize=14)
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "precision_recall_curves.png"), dpi=150, bbox_inches='tight')
+    plt.close()
+    print("[PR] Saved precision_recall_curves.png")
+    
+    # Create calibration plot
+    from sklearn.calibration import calibration_curve
+    plt.figure(figsize=(10, 8))
+    
+    for model_name, model_obj in [("Logistic Regression", logit), ("Gradient Boosting", gb)]:
+        if model_name == "Logistic Regression":
+            y_pred_proba_model = model_obj.predict_proba(X_test_s)[:, 1]
+        else:
+            y_pred_proba_model = model_obj.predict_proba(X_test)[:, 1]
+        
+        fraction_of_positives, mean_predicted_value = calibration_curve(y_test, y_pred_proba_model, n_bins=10)
+        plt.plot(mean_predicted_value, fraction_of_positives, marker='o', linewidth=2, label=model_name)
+    
+    plt.plot([0, 1], [0, 1], 'k--', linewidth=1, label='Perfect Calibration')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.0])
+    plt.xlabel('Mean Predicted Probability', fontsize=12)
+    plt.ylabel('Fraction of Positives', fontsize=12)
+    plt.title(f'Calibration Plot - Model Comparison ({mode} mode)', fontsize=14)
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "calibration_plot.png"), dpi=150, bbox_inches='tight')
+    plt.close()
+    print("[Calibration] Saved calibration_plot.png")
+    
+    # Create feature importance plot (for Gradient Boosting)
+    if hasattr(gb, 'feature_importances_'):
+        feature_names = X.columns
+        importances = gb.feature_importances_
+        indices = np.argsort(importances)[::-1][:15]  # Top 15 features
+        
+        plt.figure(figsize=(12, 8))
+        plt.title('Top 15 Feature Importances (Gradient Boosting)', fontsize=14)
+        plt.bar(range(len(indices)), importances[indices])
+        plt.xticks(range(len(indices)), [feature_names[i] for i in indices], rotation=45, ha='right')
+        plt.ylabel('Importance', fontsize=12)
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "feature_importance_plot.png"), dpi=150, bbox_inches='tight')
+        plt.close()
+        print("[Feature Importance] Saved feature_importance_plot.png")
 
     # IPW using best model on full X
     if best_model_name == "logistic_regression":
