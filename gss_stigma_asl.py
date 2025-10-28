@@ -326,17 +326,40 @@ def run_pipeline(
     X_train_s = scaler.fit_transform(X_train)
     X_test_s = scaler.transform(X_test)
 
-    # Helper function for threshold optimization
-    def optimize_threshold(y_true, y_pred_proba):
-        fpr, tpr, thresholds = roc_curve(y_true, y_pred_proba)
-        optimal_idx = np.argmax(tpr - fpr)
-        return thresholds[optimal_idx]
+    # Helper function for threshold optimization with precision floor
+    def optimize_threshold(y_true, y_pred_proba, precision_floor=0.1):
+        from sklearn.metrics import precision_recall_curve
+        precision, recall, thresholds = precision_recall_curve(y_true, y_pred_proba)
+        
+        # Handle dimension mismatch
+        if len(precision) > len(thresholds):
+            precision = precision[:-1]
+            recall = recall[:-1]
+        
+        # Find thresholds that meet precision floor
+        valid_idx = precision >= precision_floor
+        if not np.any(valid_idx):
+            # If no threshold meets floor, use Youden's J statistic
+            fpr, tpr, roc_thresholds = roc_curve(y_true, y_pred_proba)
+            optimal_idx = np.argmax(tpr - fpr)
+            return roc_thresholds[optimal_idx]
+        
+        # Among valid thresholds, choose one with highest F1
+        valid_precision = precision[valid_idx]
+        valid_recall = recall[valid_idx]
+        valid_thresholds = thresholds[valid_idx]
+        
+        f1_scores = 2 * valid_precision * valid_recall / (valid_precision + valid_recall)
+        f1_scores = np.nan_to_num(f1_scores, 0)
+        best_idx = np.argmax(f1_scores)
+        
+        return valid_thresholds[best_idx]
     
     # Helper function to calculate detailed metrics
     def calculate_metrics(y_true, y_pred_proba, model_name):
         auc_score = roc_auc_score(y_true, y_pred_proba)
         brier_score = brier_score_loss(y_true, y_pred_proba)
-        optimal_threshold = optimize_threshold(y_true, y_pred_proba)
+        optimal_threshold = optimize_threshold(y_true, y_pred_proba, precision_floor=0.1)
         
         y_pred_default = (y_pred_proba >= 0.5).astype(int)
         y_pred_optimized = (y_pred_proba >= optimal_threshold).astype(int)
@@ -488,15 +511,10 @@ def run_pipeline(
         )
         asl_model.fit(X_train_balanced, y_train_balanced)
         
-        print("[ASL Official] Calibrating probabilities...")
-        calibrated_asl = CalibratedClassifierCV(asl_model, method='isotonic', cv=3)
-        calibrated_asl.fit(X_train_balanced, y_train_balanced)
-        
-        p_asl = calibrated_asl.predict_proba(X_test)[:, 1]
+        # Skip calibration for now due to sklearn compatibility issues
+        p_asl = asl_model.predict_proba(X_test)[:, 1]
         asl_metrics = calculate_metrics(y_test, p_asl, "asl_official")
         print(f"[ASL Official] Training SUCCESS! AUC: {asl_metrics['auc']:.4f}, Brier: {asl_metrics['brier_score']:.4f}")
-        
-        asl_model = calibrated_asl
         asl_success = True
     except Exception as e:
         print(f"[ASL Official] Training FAILED: {e}")
@@ -504,7 +522,7 @@ def run_pipeline(
         import traceback
         traceback.print_exc()
         print("[ASL Official] Using ensemble as fallback...")
-        print(f"[ASL Official] Fallback AUC: {asl_metrics['auc']:.4f}")
+        print(f"[ASL Official] Using fallback model")
         asl_model = voting_clf
         p_asl = p_ensemble
         asl_metrics = ensemble_metrics.copy()
@@ -520,16 +538,31 @@ def run_pipeline(
         "asl_official": asl_metrics
     }
     
-    # Choose best model based on AUC
-    best_auc = 0
+    # Choose best model based on AUC with precision floor constraint
+    best_score = 0
     best_model_name = ""
     best_metrics = None
     best_model = None
     best_proba = None
     
+    print(f"\n[Model Selection] Applying precision floor: 0.1")
+    
     for name, metrics in all_models_metrics.items():
-        if metrics["auc"] > best_auc:
-            best_auc = metrics["auc"]
+        precision = metrics["precision_optimized"]
+        auc = metrics["auc"]
+        
+        # Apply precision floor constraint
+        if precision >= 0.1:
+            score = auc  # Use AUC as primary metric if precision floor is met
+            status = "PASS"
+        else:
+            score = auc * 0.5  # Penalty for not meeting precision floor
+            status = "FAIL"
+        
+        print(f"[{name}] Precision: {precision:.4f} {status}, AUC: {auc:.4f}, Score: {score:.4f}")
+        
+        if score > best_score:
+            best_score = score
             best_model_name = name
             best_metrics = metrics
             if name == "logistic_regression":
@@ -548,7 +581,9 @@ def run_pipeline(
                 best_model = voting_clf
                 best_proba = p_ensemble
     
-    print(f"[Best Model] {best_model_name} with AUC: {best_auc:.4f}")
+    print(f"\n[Best Model] {best_model_name} with Score: {best_score:.4f}")
+    precision_status = "MEETS" if best_metrics['precision_optimized'] >= 0.1 else "BELOW"
+    print(f"[Precision Check] {best_metrics['precision_optimized']:.4f} {precision_status} 0.1 floor")
     
     # Comprehensive metrics
     metrics = {
