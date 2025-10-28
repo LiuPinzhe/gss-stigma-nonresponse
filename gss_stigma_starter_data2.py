@@ -36,7 +36,9 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # Defaults & Config (Enhanced from starter13)
 # -----------------------------
 DEFAULT_ITEMS: List[str] = [
-    "homosex"   # homosexual attitude (from starter13)
+    "homosex",  # homosexual attitude (from starter13)
+    "premarsx",  # premarital sex attitude
+    "xmarsex",   # extramarital sex attitude
 ]
 
 DEFAULT_PREDICTORS: List[str] = [
@@ -316,6 +318,20 @@ def run_pipeline(
         print(f"[Target] Modeling composite nonresponse for: {target}")
         print(f"[Target] Composite includes: {items_present}")
         print(f"[Mode] Composite mode")
+
+        # ---- Summary statistics for composite ----
+        total_cases = len(df)
+        asked_count = asked_any.sum()
+        refused_count = (df['NR_SEX'] == 1).sum()
+        valid_count = (df['NR_SEX'] == 0).sum()
+        not_asked_count = total_cases - asked_count
+
+        print(f"[Composite Summary]")
+        print(f"  Total respondents: {total_cases:,}")
+        print(f"  Asked any sensitive question: {asked_count:,} ({asked_count/total_cases:.1%})")
+        print(f"  - Refused at least one (NR_SEX=1): {refused_count:,} ({refused_count/asked_count:.1%} of asked)")
+        print(f"  - Answered all (NR_SEX=0): {valid_count:,} ({valid_count/asked_count:.1%} of asked)")
+        print(f"  Not asked any sensitive question: {not_asked_count:,} ({not_asked_count/total_cases:.1%})")
     else:
         raise ValueError(f"Invalid mode: {mode}. Use 'single' or 'composite'.")
 
